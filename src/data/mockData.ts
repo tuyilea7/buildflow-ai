@@ -7,7 +7,7 @@ import type {
 
 export const USERS: User[] = [
   {
-    id: 'u1', name: 'Edgar Nkurunziza', email: 'edgar@buildflow.rw',
+    id: 'u1', name: 'Edgar Gatsinzi', email: 'edgar@buildflow.rw',
     role: 'director', department: 'Management', active: true,
     createdAt: '2024-01-10', lastLogin: '2026-10-13', phone: '+250 788 100 001'
   },
