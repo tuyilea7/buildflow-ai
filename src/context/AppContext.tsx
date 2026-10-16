@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, useCallback } from 'react'
+import React, { createContext, useContext, useState, useCallback, useEffect } from 'react'
 import type {
   Document, Project, ReviewTask, Notification, ActivityEvent,
   ProjectStage, BIMExecutionPlan, CoordinationIssue
@@ -14,13 +14,46 @@ import {
   COORDINATION_ISSUES as initIssues,
 } from '../data/mockData'
 
+// ─── localStorage helpers ─────────────────────────────────────────────────────
+
+const KEYS = {
+  documents:          'bf_documents',
+  projects:           'bf_projects',
+  reviewTasks:        'bf_review_tasks',
+  notifications:      'bf_notifications',
+  activity:           'bf_activity',
+  projectStages:      'bf_project_stages',
+  bimExecutionPlans:  'bf_bim_execution_plans',
+  coordinationIssues: 'bf_coordination_issues',
+}
+
+function load<T>(key: string, fallback: T): T {
+  try {
+    const raw = localStorage.getItem(key)
+    if (!raw) return fallback
+    return JSON.parse(raw) as T
+  } catch {
+    return fallback
+  }
+}
+
+function save<T>(key: string, value: T): void {
+  try {
+    localStorage.setItem(key, JSON.stringify(value))
+  } catch {
+    // localStorage full or unavailable — silently ignore
+  }
+}
+
+// ─── Context interface ────────────────────────────────────────────────────────
+
 interface AppContextValue {
   documents: Document[]
   projects: Project[]
   reviewTasks: ReviewTask[]
   notifications: Notification[]
   activity: ActivityEvent[]
-  fileStore: Record<string, File>
+  fileStore: Record<string, File>         // Files can't be stored in localStorage — session only
   projectStages: ProjectStage[]
   bimExecutionPlans: BIMExecutionPlan[]
   coordinationIssues: CoordinationIssue[]
@@ -37,20 +70,38 @@ interface AppContextValue {
   saveBEP: (bep: BIMExecutionPlan) => void
   addCoordinationIssue: (issue: CoordinationIssue) => void
   updateCoordinationIssue: (id: string, updates: Partial<CoordinationIssue>) => void
+  clearAllData: () => void
 }
 
 const AppContext = createContext<AppContextValue | null>(null)
 
+// ─── Provider ─────────────────────────────────────────────────────────────────
+
 export function AppProvider({ children }: { children: React.ReactNode }) {
-  const [documents, setDocuments] = useState<Document[]>(initDocs)
-  const [projects, setProjects] = useState<Project[]>(initProjects)
-  const [reviewTasks, setReviewTasks] = useState<ReviewTask[]>(initReviews)
-  const [notifications, setNotifications] = useState<Notification[]>(initNotifs)
-  const [activity, setActivity] = useState<ActivityEvent[]>(initActivity)
+  // Load from localStorage on first render, fall back to mock data defaults
+  const [documents,          setDocuments]          = useState<Document[]>(() =>           load(KEYS.documents,          initDocs))
+  const [projects,           setProjects]           = useState<Project[]>(() =>            load(KEYS.projects,           initProjects))
+  const [reviewTasks,        setReviewTasks]        = useState<ReviewTask[]>(() =>         load(KEYS.reviewTasks,        initReviews))
+  const [notifications,      setNotifications]      = useState<Notification[]>(() =>      load(KEYS.notifications,      initNotifs))
+  const [activity,           setActivity]           = useState<ActivityEvent[]>(() =>     load(KEYS.activity,           initActivity))
+  const [projectStages,      setProjectStages]      = useState<ProjectStage[]>(() =>      load(KEYS.projectStages,      initStages))
+  const [bimExecutionPlans,  setBimExecutionPlans]  = useState<BIMExecutionPlan[]>(() =>  load(KEYS.bimExecutionPlans,  initBEPs))
+  const [coordinationIssues, setCoordinationIssues] = useState<CoordinationIssue[]>(() => load(KEYS.coordinationIssues, initIssues))
+
+  // Files cannot be serialized to localStorage — they are session-only
   const [fileStore, setFileStore] = useState<Record<string, File>>({})
-  const [projectStages, setProjectStages] = useState<ProjectStage[]>(initStages)
-  const [bimExecutionPlans, setBimExecutionPlans] = useState<BIMExecutionPlan[]>(initBEPs)
-  const [coordinationIssues, setCoordinationIssues] = useState<CoordinationIssue[]>(initIssues)
+
+  // ── Persist to localStorage whenever state changes ──────────────────────────
+  useEffect(() => { save(KEYS.documents,          documents)          }, [documents])
+  useEffect(() => { save(KEYS.projects,           projects)           }, [projects])
+  useEffect(() => { save(KEYS.reviewTasks,        reviewTasks)        }, [reviewTasks])
+  useEffect(() => { save(KEYS.notifications,      notifications)      }, [notifications])
+  useEffect(() => { save(KEYS.activity,           activity)           }, [activity])
+  useEffect(() => { save(KEYS.projectStages,      projectStages)      }, [projectStages])
+  useEffect(() => { save(KEYS.bimExecutionPlans,  bimExecutionPlans)  }, [bimExecutionPlans])
+  useEffect(() => { save(KEYS.coordinationIssues, coordinationIssues) }, [coordinationIssues])
+
+  // ── Actions ──────────────────────────────────────────────────────────────────
 
   const addDocument = useCallback((doc: Document, file?: File) => {
     setDocuments(prev => [doc, ...prev])
@@ -105,9 +156,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         : d
     ))
     setReviewTasks(prev => prev.map(rt =>
-      rt.documentId === docId
-        ? { ...rt, status: 'approved', completedAt: now }
-        : rt
+      rt.documentId === docId ? { ...rt, status: 'approved', completedAt: now } : rt
     ))
     setActivity(prev => [{
       id: `a_${Date.now()}`, userId, userName, action: 'approved',
@@ -124,9 +173,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     setReviewTasks(prev => prev.map(rt =>
       rt.documentId === docId
         ? {
-            ...rt,
-            status: 'rejected',
-            completedAt: now,
+            ...rt, status: 'rejected', completedAt: now,
             comments: [...rt.comments, {
               id: `c_${Date.now()}`, author: userName, authorId: userId,
               text: reason, createdAt: now, type: 'rejection' as const
@@ -134,7 +181,12 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
           }
         : rt
     ))
-  }, [])
+    setActivity(prev => [{
+      id: `a_${Date.now()}`, userId, userName, action: 'rejected',
+      target: documents.find(d => d.id === docId)?.title ?? docId,
+      documentId: docId, createdAt: now
+    }, ...prev])
+  }, [documents])
 
   const unreadCount = useCallback((userId: string) =>
     notifications.filter(n => n.userId === userId && !n.read).length,
@@ -156,13 +208,27 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     setCoordinationIssues(prev => prev.map(i => i.id === id ? { ...i, ...updates } : i))
   }, [])
 
+  // Clear all data and reset to defaults (admin utility)
+  const clearAllData = useCallback(() => {
+    Object.values(KEYS).forEach(k => localStorage.removeItem(k))
+    setDocuments(initDocs)
+    setProjects(initProjects)
+    setReviewTasks(initReviews)
+    setNotifications(initNotifs)
+    setActivity(initActivity)
+    setProjectStages(initStages)
+    setBimExecutionPlans(initBEPs)
+    setCoordinationIssues(initIssues)
+    setFileStore({})
+  }, [])
+
   return (
     <AppContext.Provider value={{
       documents, projects, reviewTasks, notifications, activity, fileStore,
       projectStages, bimExecutionPlans, coordinationIssues,
       addDocument, updateDocument, addProject, updateProject, approveProject,
       markNotificationRead, markAllRead, approveDocument, rejectDocument, unreadCount,
-      saveBEP, addCoordinationIssue, updateCoordinationIssue,
+      saveBEP, addCoordinationIssue, updateCoordinationIssue, clearAllData,
     }}>
       {children}
     </AppContext.Provider>
